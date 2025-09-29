@@ -69,235 +69,97 @@
 
     <div style="display:flex;gap:8px;margin-top:10px">
       <button id="saveBtn">Randevu Kaydet</button>
-      <button id="clearLocal" title="Tüm rezervasyonları temizle (Firestore'dan da silmez)">Sıfırla (yerel)</button>
     </div>
 
     <div class="warning" id="warn"></div>
     <div class="small">Not: Veriler paylaşılan Firestore veritabanında saklanır; sayfa yenilendiğinde herkes güncellenir.</div>
   </div>
 
-  <!-- Firebase (compat) SDK - küçük, basit kullanım -->
+  <!-- Firebase SDK -->
   <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
 
   <script>
-  // ====== 1) Buraya Firebase config koyacaksın (Firebase konsoldan al) ======
-  // ÖRNEK:
-  // const firebaseConfig = { apiKey: "...", authDomain: "...", projectId: "...", storageBucket: "...", messagingSenderId: "...", appId: "..." };
+  // ====== 1) Buraya Firebase config koyacaksın ======
   const firebaseConfig = {
-    // <-- BURAYI FIREBASE KONSOLDAN KOPYALA / YAPIŞTIR -->
+    apiKey: "API_KEYIN",
+    authDomain: "PROJECTID.firebaseapp.com",
+    projectId: "PROJECTID",
+    storageBucket: "PROJECTID.appspot.com",
+    messagingSenderId: "SENDERID",
+    appId: "APPID"
   };
-  // ======================================================================
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.firestore();
 
-  if (!firebaseConfig || !firebaseConfig.projectId) {
-    document.getElementById('warn').textContent = 'firebaseConfig eklenmedi — Firebase konsoldan config alıp buraya yapıştırın.';
-    // render minimal calendar so UI not empty
-  } else {
-    firebase.initializeApp(firebaseConfig);
-    var db = firebase.firestore();
-  }
-
-  // yardımcılar
-  function pad(n){ return n<10 ? '0'+n : ''+n }
+  // Yardımcı fonksiyonlar
+  function pad(n){ return n<10?'0'+n:''+n }
   function dateKey(y,m,d){ return `${y}-${pad(m+1)}-${pad(d)}` }
-  function parseTimeToMinutes(t){
-    const p = (''+t).split(':'); if(p.length!==2) return NaN;
-    const hh = parseInt(p[0],10), mm=parseInt(p[1],10);
-    if(isNaN(hh)||isNaN(mm)) return NaN;
-    return hh*60+mm;
-  }
+  function parseTimeToMinutes(t){ const p=t.split(':'); return parseInt(p[0])*60+parseInt(p[1]) }
 
-  // state
-  let reservations = []; // yüklenen veriler
+  let reservations = [];
   let extraPerson = null;
 
-  // DOM refs
-  const yearEl = document.getElementById('year');
-  const monthEl = document.getElementById('month');
-  const dayEl = document.getElementById('day');
-  const timeEl = document.getElementById('time');
-  const personEl = document.getElementById('person');
-  const typeEl = document.getElementById('type');
-  const warnEl = document.getElementById('warn');
+  const yearEl=document.getElementById('year');
+  const monthEl=document.getElementById('month');
+  const dayEl=document.getElementById('day');
+  const timeEl=document.getElementById('time');
+  const personEl=document.getElementById('person');
+  const typeEl=document.getElementById('type');
+  const warnEl=document.getElementById('warn');
+  const now=new Date();
 
-  // today
-  const now = new Date();
-
-  // doldur: yıllar
-  for(let y=2025; y<=2030; y++){
-    const o = document.createElement('option'); o.value=y; o.textContent=y; yearEl.appendChild(o);
-  }
-  yearEl.value = now.getFullYear();
-  monthEl.selectedIndex = now.getMonth();
+  for(let y=2025;y<=2030;y++){ const o=document.createElement('option'); o.value=y; o.textContent=y; yearEl.appendChild(o); }
+  yearEl.value=now.getFullYear();
+  monthEl.selectedIndex=now.getMonth();
 
   function updateDayOptions(){
     dayEl.innerHTML='';
-    const y = parseInt(yearEl.value), m = monthEl.selectedIndex;
-    const days = new Date(y, m+1, 0).getDate();
-    for(let d=1; d<=days; d++){
-      const candidate = new Date(y,m,d);
-      // geçmiş gün seçilemez
-      if(candidate < new Date(now.getFullYear(), now.getMonth(), now.getDate())) continue;
+    const y=parseInt(yearEl.value), m=monthEl.selectedIndex;
+    const days=new Date(y,m+1,0).getDate();
+    for(let d=1;d<=days;d++){
+      const candidate=new Date(y,m,d);
+      if(candidate<new Date(now.getFullYear(),now.getMonth(),now.getDate())) continue;
       const o=document.createElement('option'); o.value=d; o.textContent=d; dayEl.appendChild(o);
     }
   }
 
-  yearEl.addEventListener('change', ()=>{ updateDayOptions(); renderCalendar(); });
-  monthEl.addEventListener('change', ()=>{ updateDayOptions(); renderCalendar(); });
-
+  yearEl.addEventListener('change',()=>{ updateDayOptions(); renderCalendar(); });
+  monthEl.addEventListener('change',()=>{ updateDayOptions(); renderCalendar(); });
   updateDayOptions();
 
-  // render takvim
   function renderCalendar(){
-    const cal = document.getElementById('calendar'); cal.innerHTML='';
-    const y = parseInt(yearEl.value), m = monthEl.selectedIndex;
-    const days = new Date(y, m+1, 0).getDate();
-    for(let d=1; d<=days; d++){
-      const thisDate = new Date(y,m,d);
-      const cell = document.createElement('div'); cell.className='day';
-      if(thisDate < new Date(now.getFullYear(), now.getMonth(), now.getDate())) cell.classList.add('past');
-      // if there are events, show them
-      const dayKey = dateKey(y,m,d);
-      const dayEvents = reservations.filter(r=> r.date === dayKey);
-      if(dayEvents.length>0){
-        cell.classList.add('has-events');
-        const title = document.createElement('div'); title.className='date-large'; title.textContent = d; cell.appendChild(title);
-        dayEvents.forEach(ev=>{
-          const s = document.createElement('div'); s.className='slot';
-          s.textContent = `${ev.type}: ${ev.person} ${ev.time? '('+ev.time+')' : ''}`;
-          cell.appendChild(s);
-        });
-      } else {
-        // empty large white day number
-        const big = document.createElement('div'); big.style.color='#fff'; big.style.fontSize='28px'; big.style.margin='auto'; big.textContent = d;
-        cell.innerHTML=''; cell.appendChild(big);
-      }
+    const cal=document.getElementById('calendar'); cal.innerHTML='';
+    const y=parseInt(yearEl.value), m=monthEl.selectedIndex;
+    const days=new Date(y,m+1,0).getDate();
+    for(let d=1;d<=days;d++){
+      const thisDate=new Date(y,m,d);
+      const cell=document.createElement('div'); cell.className='day';
+      if(thisDate<new Date(now.getFullYear(),now.getMonth(),now.getDate())) cell.classList.add('past');
+      const dayKeyStr=dateKey(y,m,d);
+      const dayEvents=reservations.filter(r=>r.date===dayKeyStr);
+      if(dayEvents.length>0){ cell.classList.add('has-events'); const title=document.createElement('div'); title.className='date-large'; title.textContent=d; cell.appendChild(title);
+        dayEvents.forEach(ev=>{ const s=document.createElement('div'); s.className='slot'; s.textContent=`${ev.type}: ${ev.person} ${ev.time? '('+ev.time+')':''}`; cell.appendChild(s); });
+      } else { const big=document.createElement('div'); big.style.color='#fff'; big.style.fontSize='28px'; big.style.margin='auto'; big.textContent=d; cell.innerHTML=''; cell.appendChild(big); }
       cal.appendChild(cell);
     }
   }
 
-  // Firestore real-time listener (eğer firebaseConfig varsa)
-  if (typeof db !== 'undefined') {
-    db.collection('reservations').orderBy('createdAt').onSnapshot(snap=>{
-      reservations = [];
-      snap.forEach(doc=>{
-        const d = doc.data();
-        // normalize date stored as string yyyy-mm-dd
-        reservations.push(Object.assign({}, d, { _id: doc.id }));
-      });
-      renderCalendar();
-    }, err=>{
-      warnEl.textContent = 'Firestore okuma hatası: '+err.message;
-    });
-  } else {
-    // if no firebase configured, still render empty calendar
+  // Firestore listener
+  db.collection('reservations').orderBy('createdAt').onSnapshot(snap=>{
+    reservations=[]; snap.forEach(doc=>{ reservations.push(Object.assign({},doc.data(),{_id:doc.id})); });
     renderCalendar();
-  }
+  });
 
-  // validation ve ekleme (Firestore'a yaz)
   async function addReservationToFirestore(obj){
-    // basit write
-    if(typeof db === 'undefined') {
-      warnEl.textContent = 'Firebase yapılandırılmadığı için kaydetilemiyor.';
-      return;
-    }
-    try{
-      await db.collection('reservations').add(Object.assign({}, obj, { createdAt: firebase.firestore.FieldValue.serverTimestamp() }));
-    }catch(e){ warnEl.textContent = 'Kaydetme hatası: '+e.message; }
+    try{ await db.collection('reservations').add(Object.assign({}, obj, { createdAt: firebase.firestore.FieldValue.serverTimestamp() })); }
+    catch(e){ warnEl.textContent='Kaydetme hatası: '+e.message; }
   }
 
   async function addEvent(){
     warnEl.textContent='';
-    const y = parseInt(yearEl.value), m = monthEl.selectedIndex, d = parseInt(dayEl.value);
-    const time = timeEl.value.trim();
-    const person = personEl.value;
-    const type = typeEl.value;
-
-    if(!time.match(/^\d{1,2}:\d{2}$/)){
-      warnEl.textContent = 'Lütfen geçerli bir saat girin (örn: 14:45).'; return;
-    }
-    const [hh,mm] = time.split(':').map(Number);
-    if(isNaN(hh) || isNaN(mm) || hh<0 || hh>23 || mm<0 || mm>59){ warnEl.textContent='Lütfen geçerli bir saat girin (örn: 14:45).'; return; }
-
-    const selectedDateTime = new Date(y,m,d,hh,mm);
-    if(selectedDateTime < new Date()){ warnEl.textContent='Geçmiş bir tarih veya saat seçemezsiniz.'; return; }
-
-    // çamaşır kuralları
-    if(type === 'Çamaşır'){
-      // aynı gün varsa
-      const already = reservations.find(r => r.type==='Çamaşır' && r.date === dateKey(y,m,d));
-      if(already){ warnEl.textContent='Bu gün için çamaşır randevusu zaten alınmış.'; return; }
-      // +/-1 gün kontrolü (önceki ve sonraki gün yasak)
-      const prevKey = dateKey(y,m,d-1); // note: dateKey expects month index; for simplicity check by Date objects
-      // safer: check by Date difference
-      const laundryNear = reservations.find(r=>{
-        if(r.type!=='Çamaşır') return false;
-        const parts = r.date.split('-').map(Number); // yyyy,mm,dd
-        const rDate = new Date(parts[0], parts[1]-1, parts[2]);
-        const sel = new Date(y,m,d);
-        const diffDays = Math.round((rDate - sel)/(1000*60*60*24));
-        return Math.abs(diffDays) === 1;
-      });
-      if(laundryNear){ warnEl.textContent='Bir gün önce veya sonrasına randevu alamazsınız. Asılan çamaşırlar kurumamış olabilir.'; return; }
-    }
-
-    // duş kuralları: +/- 2 saat 55 dakika (175 dk) aralığı engelle; sınır dakikalar serbest
-    if(type === 'Duş'){
-      // get all reservations same date and type=Duş
-      const sameDayShowers = reservations.filter(r=> r.type==='Duş' && r.date === dateKey(y,m,d));
-      const selMinutes = hh*60 + mm;
-      for(const s of sameDayShowers){
-        if(!s.time) continue;
-        const [sh,sm] = s.time.split(':').map(Number);
-        const otherMin = sh*60 + sm;
-        const diff = selMinutes - otherMin; // signed
-        // forbidden if diff in (-175, 175) but endpoints allowed: i.e. diff <= -174 ? care:
-        // We want: if other at 12:00 -> forbid 10:01 (diff = -119) .. 13:59 (diff=119)
-        // 175 minutes corresponds to 2h55 = 175 -> forbidden if Math.abs(diff) < 175 , but need to allow exactly -175 and +175
-        if(Math.abs(diff) < 175){
-          warnEl.textContent = 'Seçilen saat yakınında başka bir duş randevusu var. Usulünce yapılması için lütfen 2 saat 55 dakika önce veya sonrasına tekrar randevu almayı deneyin.';
-          return;
-        }
-      }
-    }
-
-    // passed validation -> write to Firestore
-    const doc = {
-      date: dateKey(y,m,d),
-      year: y, month: m, day: d,
-      time: time,
-      person: person,
-      type: type,
-      createdAt: firebase.firestore.FieldValue.serverTimestamp()
-    };
-    await addReservationToFirestore(doc);
-    timeEl.value=''; // temizle
-  }
-
-  // ekstra kişi ekleme
-  document.getElementById('addPersonBtn').addEventListener('click', ()=>{ document.getElementById('addPersonBox').style.display = 'block'; });
-  document.getElementById('addPersonDo').addEventListener('click', ()=>{
-    const name = document.getElementById('newPerson').value.trim();
-    if(!name){ warnEl.textContent='Kişi adı boş bırakılamaz.'; return; }
-    if(extraPerson){ warnEl.textContent='Zaten bir ek kullanıcı mevcut. Daha fazla ekleyemezsiniz.'; return; }
-    const o = document.createElement('option'); o.value = name; o.textContent = name; personEl.appendChild(o);
-    extraPerson = name;
-    document.getElementById('newPerson').value=''; document.getElementById('addPersonBox').style.display='none';
-    warnEl.textContent='';
-  });
-  document.getElementById('removePerson').addEventListener('click', ()=>{
-    if(!extraPerson) return;
-    Array.from(personEl.options).forEach(opt=>{ if(opt.value===extraPerson) opt.remove(); });
-    extraPerson = null;
-    document.getElementById('newPerson').value=''; document.getElementById('addPersonBox').style.display='none';
-  });
-
-  // save button
-  document.getElementById('saveBtn').addEventListener('click', ()=>{ addEventWrapper(); });
-  async function addEventWrapper(){ await addEvent(); /* addEvent pushes to Firestore and listener will refresh */ }
-
-  // initial render
-  renderCalendar();
-  </script>
-</body>
-</html>
+    const y=parseInt(yearEl.value), m=monthEl.selectedIndex, d=parseInt(dayEl.value);
+    const time=timeEl.value.trim(), person=personEl.value, type=typeEl.value;
+    if(!time.match(/^\d{1,2}:\d{2}$/)){ warnEl.textContent='Lütfen geçerli bir saat girin (örn: 14:45).'; return; }
+    const [hh,mm]=time.split(':').map(Number);
+    if(isNa
